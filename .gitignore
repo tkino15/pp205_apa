@@ -1,9 +1,20 @@
 # original
 .DS_Store
 .vscode
-log
-notebooks
-src
+*.Rproj
+*.csv
+*.png
+*.log
+*.geojson
+*.dbf
+*.prj
+*.shp
+*.shx
+*.xml
+*.txt
+*.qlr
+*.qgz
+
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
@@ -109,3 +120,4 @@ venv.bak/
 
 # mypy
 .mypy_cache/
+.Rproj.user
