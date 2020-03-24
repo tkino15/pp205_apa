@@ -1,0 +1,177 @@
+---
+title: 'Event Studies'
+author: 'Takuma Kinoshita'
+output: html_document
+editor_options: 
+  chunk_output_type: inline
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(tidyverse)
+library(broom)
+library(sf)
+library(rgdal)
+library(lme4)
+library(rstan)
+library(brms)
+library(bayesplot)
+library(zoo)
+```
+
+## Load Data
+
+```{r}
+setwd("/Users/takuma/Documents/30_pp205_apa/3_project")
+
+islands <- c('東京大島', '新島', '神津島', '小笠原', '八丈', '東京三宅')
+data <- read_sf('data/input/prices_and_maps_tokyo.geojson', as_tibble = TRUE) %>%
+    filter(!(city %in% islands)) %>%  # remove islands
+    filter((duplicate_no == 0))  # lef only first map if multiples
+plot(data, max.plot = 6)
+```
+
+# Wide to long
+```{r}
+price_cols = c()
+i = 1
+for (col in names(data)) {
+    if (grepl("price", col, fixed = TRUE)) {
+        price_cols <- append(price_cols, col)
+        i <- i + 1
+    }
+}
+
+long <- data %>% 
+  gather("price_year", "price", all_of(price_cols)) %>%  # wide to long
+  mutate(price = as.numeric(price)) %>% 
+  mutate(price_year = str_replace_all(price_year, pattern = "price_", replacement = "")) %>%  # remove prefix of price_year
+  filter(price != 0) %>%  # only rows with price
+  mutate(price_date = as.POSIXct(paste(price_year, 1, 1, sep = "-")))  # convert year from string to POSIX
+```
+
+# create some features
+
+```{r}
+# time lapse
+long <- long %>%
+  mutate(time_lapse = price_date - map_date) %>%  # time lapse days
+  mutate(time_lapse_year = ceiling(time_lapse / 365))  # time lapse years
+
+# is_depth
+long <- long %>% 
+  mutate(is_depth = !is.na(water_depth_scaled))
+```
+
+```{r}
+# distribution of price
+plot_price <- function(data, x, fill='a') {
+    ggplot(data, aes(x = x, y = ..density.., fill = fill)) +
+        geom_histogram(position = "identity", alpha = 0.9, bins = 50) +
+        geom_density(aes(color = fill, alpha = 0.1), show.legend = F)
+}
+
+plot_price(long, long$price)
+
+# log of price
+long <- long %>% 
+  mutate(price_log = log10(price))
+
+plot_price(long, long$price_log)
+plot_price(long, long$price_log, long$is_depth)
+```
+
+```{r}
+long %>% 
+  filter(city_is_depth == 1) %>% 
+  group_by(city_id, time_lapse_year, is_depth) %>% 
+    summarise(
+      mean_price_log = mean(price_log)
+    )
+    # spread(is_depth, mean_price_log)
+    # ggplot(aes(x = factor(time_lapse_year), y = mean_price_log, color = factor(city_id))) +
+        # geom_point()
+```
+
+
+```{r}
+ggplot(long, aes(x = factor(price_year), y = price_log)) +
+    geom_boxplot() +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+ggplot(long, aes(x = factor(city_id), y = price_log)) +
+    geom_boxplot() +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+ggplot(long, aes(x = factor(time_lapse_year), y = price_log)) +
+    geom_boxplot()
+```
+
+
+## Generalized Linear Model
+
+```{r}
+model_glm <- glm(data = long, formula = price_log ~ factor(time_lapse_year), family = gaussian(link = 'identity'))
+summary(model_glm)
+```
+
+
+```{r}
+coef_tb <- model_glm %>% 
+    tidy(conf.int = TRUE) %>% 
+    filter(term != '(Intercept)') %>% 
+    mutate(term = gsub(term, pattern = 'factor\\(time_lapse_year\\)', replacement = '')) %>% 
+    mutate(term = as.integer(term))
+coef_tb
+
+ggplot(data = coef_tb) +
+    geom_pointrange(aes(x = term, y = estimate, ymin = conf.low, ymax = conf.high))
+```
+
+
+```{r}
+plot(model_glm)
+lag.plot(long$price_log)
+```
+
+
+
+## Generalized Linear Mixed Model
+
+
+```{r}
+model_glmm <- glmer(data = long, formula = price_log ~ factor(time_lapse_year) + (1 | price_year) + (1 | city_id) , family = gaussian(link = 'identity'))
+summary(model_glmm)
+```
+
+
+```{r}
+coef_tb <- model_glmm %>% 
+    tidy(conf.int = TRUE) %>% 
+    filter(group == 'fixed') %>%
+    filter(term != '(Intercept)') %>%
+    mutate(term = gsub(term, pattern = 'factor\\(time_lapse_year\\)', replacement = '')) %>% 
+    mutate(term = as.integer(term))
+coef_tb
+
+ggplot(data = coef_tb) +
+    geom_pointrange(aes(x = term, y = estimate, ymin = conf.low, ymax = conf.high))
+```
+
+
+```{r}
+plot(model_glmm)
+
+qqnorm(resid(model_glmm))
+qqline(resid(model_glmm))
+```
+
+## Bayesian Mixed Effect Model
+
+```{r}
+
+```
+

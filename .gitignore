@@ -2,6 +2,9 @@
 .DS_Store
 .vscode
 *.Rproj
+.Rdata
+.Rhistory
+
 *.csv
 *.png
 *.log
@@ -14,6 +17,7 @@
 *.txt
 *.qlr
 *.qgz
+*.xls
 
 
 # Byte-compiled / optimized / DLL files
