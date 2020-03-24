@@ -30,7 +30,7 @@ setwd("/Users/takuma/Documents/30_pp205_apa/3_project")
 islands <- c('東京大島', '新島', '神津島', '小笠原', '八丈', '東京三宅')
 data <- read_sf('data/input/prices_and_maps_tokyo.geojson', as_tibble = TRUE) %>%
     filter(!(city %in% islands)) %>%  # remove islands
-    filter((duplicate_no == 0))  # lef only first map if multiples
+    filter((duplicate_no == 0))  # left only first map if multiples
 plot(data, max.plot = 6)
 ```
 
@@ -58,8 +58,9 @@ long <- data %>%
 ```{r}
 # time lapse
 long <- long %>%
-  mutate(time_lapse = price_date - map_date) %>%  # time lapse days
-  mutate(time_lapse_year = ceiling(time_lapse / 365))  # time lapse years
+  mutate(time_lapse = map_date - price_date) %>%  # time lapse days
+  mutate(time_lapse_year = ceiling(time_lapse / 365)) %>% 
+  mutate(time_lapse_year = replace_na(time_lapse_year, -999))# time lapse years
 
 # is_depth
 long <- long %>% 
@@ -84,18 +85,6 @@ plot_price(long, long$price_log)
 plot_price(long, long$price_log, long$is_depth)
 ```
 
-```{r}
-long %>% 
-  filter(city_is_depth == 1) %>% 
-  group_by(city_id, time_lapse_year, is_depth) %>% 
-    summarise(
-      mean_price_log = mean(price_log)
-    )
-    # spread(is_depth, mean_price_log)
-    # ggplot(aes(x = factor(time_lapse_year), y = mean_price_log, color = factor(city_id))) +
-        # geom_point()
-```
-
 
 ```{r}
 ggplot(long, aes(x = factor(price_year), y = price_log)) +
@@ -111,10 +100,10 @@ ggplot(long, aes(x = factor(time_lapse_year), y = price_log)) +
 ```
 
 
-## Generalized Linear Model
+## Linear Model
 
 ```{r}
-model_glm <- glm(data = long, formula = price_log ~ factor(time_lapse_year), family = gaussian(link = 'identity'))
+model_glm <- lm(data = long, formula = price_log ~ factor(time_lapse_year))
 summary(model_glm)
 ```
 
@@ -143,13 +132,13 @@ lag.plot(long$price_log)
 
 
 ```{r}
-model_glmm <- glmer(data = long, formula = price_log ~ factor(time_lapse_year) + (1 | price_year) + (1 | city_id) , family = gaussian(link = 'identity'))
-summary(model_glmm)
+model_lmm <- lmer(data = long, formula = price_log ~ factor(time_lapse_year) + (1 | price_year) + (1 | city_id))
+summary(model_lmm)
 ```
 
 
 ```{r}
-coef_tb <- model_glmm %>% 
+coef_tb <- model_lmm %>% 
     tidy(conf.int = TRUE) %>% 
     filter(group == 'fixed') %>%
     filter(term != '(Intercept)') %>%
