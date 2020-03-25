@@ -1,0 +1,11 @@
+version: "3"
+services:
+    rstats:
+        image: gcr.io/kaggle-images/rstats:staging 
+        volumes:
+            - $PWD:/home/rstudio/projects
+        working_dir: /home/rstudio
+        tty: true
+        ports:
+            - 8787:8787
+        command: rstudio-server start

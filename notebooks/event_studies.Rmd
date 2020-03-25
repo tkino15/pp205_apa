@@ -20,6 +20,9 @@ library(rstan)
 library(brms)
 library(bayesplot)
 library(zoo)
+
+rstan_options(auto_write = TRUE)
+options(mc.cores = parallel::detectCores())
 ```
 
 ## Load Data
@@ -28,11 +31,26 @@ library(zoo)
 setwd("/Users/takuma/Documents/30_pp205_apa/3_project")
 
 islands <- c('東京大島', '新島', '神津島', '小笠原', '八丈', '東京三宅')
+metro_areas <- c("千代田", "中央", "港", "新宿", "文京", "台東", "墨田",
+                 "江東", "品川", "目黒", "大田", "世田谷", "渋谷", "中野",
+                 "杉並", "豊島", "北", "荒川", "板橋", "練馬", "足立", "葛飾", "江戸川")
+
 data <- read_sf('data/input/prices_and_maps_tokyo.geojson', as_tibble = TRUE) %>%
-    filter(!(city %in% islands)) %>%  # remove islands
-    filter((duplicate_no == 0))  # left only first map if multiples
-plot(data, max.plot = 6)
+    filter(!city %in% islands) %>%  # remove islands
+    filter(city %in% metro_areas) %>%  # remove subverb area
+    filter(duplicate_no == 0)  # left only first map if multiples
+plot(data, max.plot = 1)
 ```
+
+
+
+# give id to each location
+
+```{r}
+data <- data %>% 
+  mutate(land_id_full = paste0(city_id, land_category, land_id))
+```
+
 
 # Wide to long
 ```{r}
@@ -58,7 +76,7 @@ long <- data %>%
 ```{r}
 # time lapse
 long <- long %>%
-  mutate(time_lapse = map_date - price_date) %>%  # time lapse days
+  mutate(time_lapse = price_date - map_date) %>%  # time lapse days
   mutate(time_lapse_year = ceiling(time_lapse / 365)) %>% 
   mutate(time_lapse_year = replace_na(time_lapse_year, -999))# time lapse years
 
@@ -128,7 +146,7 @@ lag.plot(long$price_log)
 
 
 
-## Generalized Linear Mixed Model
+## Linear Mixed Model (Only random intercept)
 
 
 ```{r}
@@ -158,9 +176,17 @@ qqnorm(resid(model_glmm))
 qqline(resid(model_glmm))
 ```
 
-## Bayesian Mixed Effect Model
+## Linear Mixed Model (random intercept + random coefficitnet)
 
 ```{r}
-
+model_lmm_coef <- brm(
+  formula = price_log ~ factor(time_lapse_year) + (factor(time_lapse_year) || price_year) + (factor(time_lapse_year) || city_id),
+  family = gaussian(link = "identity"),
+  data = long,
+  seed = 1,
+  iter = 6000,
+  warmup = 5000,
+  control = list(adapt_delta = 0.97, max_treedepth = 15)
+)
 ```
 
