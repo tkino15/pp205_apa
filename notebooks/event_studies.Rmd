@@ -19,7 +19,7 @@ library(lme4)
 library(rstan)
 library(brms)
 library(bayesplot)
-library(zoo)
+library(scales)
 
 rstan_options(auto_write = TRUE)
 options(mc.cores = parallel::detectCores())
@@ -27,33 +27,37 @@ options(mc.cores = parallel::detectCores())
 
 ## Load Data
 
-```{r}
-setwd("/Users/takuma/Documents/30_pp205_apa/3_project")
+    - Filter out non-metropolitan areas to make the price trend closer to parellel.
+    - Filter out non-housing usage land to focus people's behavior (not firms behaviour) dasfaf
 
+```{r}
 islands <- c('東京大島', '新島', '神津島', '小笠原', '八丈', '東京三宅')
 metro_areas <- c("千代田", "中央", "港", "新宿", "文京", "台東", "墨田",
                  "江東", "品川", "目黒", "大田", "世田谷", "渋谷", "中野",
                  "杉並", "豊島", "北", "荒川", "板橋", "練馬", "足立", "葛飾", "江戸川")
 
-data <- read_sf('data/input/prices_and_maps_tokyo.geojson', as_tibble = TRUE) %>%
-    filter(!city %in% islands) %>%  # remove islands
-    filter(city %in% metro_areas) %>%  # remove subverb area
-    filter(duplicate_no == 0)  # left only first map if multiples
+data <- read_sf('../data/input/prices_and_maps_tokyo.geojson', as_tibble = TRUE)
+
+# filtering
+data <- data %>% 
+    filter(duplicate_no == 0) %>%  # only first publish of map
+    filter((!city %in% islands)) %>%  # remove islands
+    filter(city %in% metro_areas)  # only metropolitan
+    # filter(grepl("住宅", usage))  # only housing usage
+    
+# give id to each location
+data <- data %>% 
+    mutate(land_id_full = paste0(city_id, land_category, land_id))
+
+data
 plot(data, max.plot = 1)
 ```
 
 
-
-# give id to each location
+# one year & one price per row
 
 ```{r}
-data <- data %>% 
-  mutate(land_id_full = paste0(city_id, land_category, land_id))
-```
-
-
-# Wide to long
-```{r}
+# make vector of "price_????"
 price_cols = c()
 i = 1
 for (col in names(data)) {
@@ -63,71 +67,153 @@ for (col in names(data)) {
     }
 }
 
+# wide to long
 long <- data %>% 
-  gather("price_year", "price", all_of(price_cols)) %>%  # wide to long
-  mutate(price = as.numeric(price)) %>% 
-  mutate(price_year = str_replace_all(price_year, pattern = "price_", replacement = "")) %>%  # remove prefix of price_year
-  filter(price != 0) %>%  # only rows with price
-  mutate(price_date = as.POSIXct(paste(price_year, 1, 1, sep = "-")))  # convert year from string to POSIX
+    gather("price_year", "price", all_of(price_cols)) %>%
+    mutate(price = as.numeric(price)) %>% 
+    mutate(price_year = str_replace_all(price_year, pattern = "price_", replacement = "")) %>%  # remove prefix of price_year
+    filter(price != 0) %>%  # only rows with price
+    mutate(price_date = as.POSIXct(paste(price_year, 1, 1, sep = "-")))  # convert year from string to POSIX
+
+long[c("land_id_full", "price_year", "price_date", "price")]
 ```
 
 # create some features
 
+    - create time difference variable (time_lapse = land price evaluated date - hazard map published date)
+    - create inundation flag (is_depth). If there is expected inundation 1, otherwise 0
+
 ```{r}
 # time lapse
 long <- long %>%
-  mutate(time_lapse = price_date - map_date) %>%  # time lapse days
-  mutate(time_lapse_year = ceiling(time_lapse / 365)) %>% 
-  mutate(time_lapse_year = replace_na(time_lapse_year, -999))# time lapse years
+    mutate(time_lapse = price_date - map_date) %>%  # time lapse days
+    mutate(time_lapse_year = ceiling(as.numeric(time_lapse) / 365)) %>% 
+    mutate(time_lapse_year = replace_na(time_lapse_year, -999))# time lapse years
 
 # is_depth
 long <- long %>% 
-  mutate(is_depth = !is.na(water_depth_scaled))
+    mutate(is_depth = !is.na(water_depth_scaled))
+
+table(long$is_depth)
+long[c("land_id_full", "price_date", "map_date", "time_lapse", "time_lapse_year")]
 ```
+
+# Explanatory data analysis
+
+    - Raw land price follows heavy-tailed distribution
+    - I applied logarithmic transformation to make it almost gaussian
 
 ```{r}
 # distribution of price
-plot_price <- function(data, x, fill='a') {
-    ggplot(data, aes(x = x, y = ..density.., fill = fill)) +
-        geom_histogram(position = "identity", alpha = 0.9, bins = 50) +
-        geom_density(aes(color = fill, alpha = 0.1), show.legend = F)
+plot_price <- function(data, x, title) {
+    ggplot(data, aes(x = x)) +
+        geom_histogram(position = "identity", alpha = 0.9, bins = 200) +
+        xlab("Land Price [JPY]") +
+        scale_y_continuous(limits = c(0, 2500)) +
+        theme_bw()
 }
+```
 
-plot_price(long, long$price)
+```{r}
+long <- long %>% mutate(price_log = log10(price))  # log of price
+long_2019 = long[long$price_year == 2019,]
 
-# log of price
-long <- long %>% 
-  mutate(price_log = log10(price))
+summary(long[c("price", "price_log")])
 
-plot_price(long, long$price_log)
-plot_price(long, long$price_log, long$is_depth)
+# without log
+wo_log <- plot_price(long, long$price) +
+  scale_x_continuous(breaks = seq(0, 1 * 10 ** 7, by = 2 * 10 ** 6), limits = c(0, 1 * 10 ** 7))
+
+# with log
+w_log <- plot_price(long, long$price, "log price all years") +
+  scale_x_log10(breaks = 10 ** (0:8), limits = c(1, 10 ** 8)) +
+  annotation_logticks(side = "b")
+
+dist_fig <- gridExtra::grid.arrange(wo_log, w_log)
+ggsave(dist_fig, device = "png", file = "../figures/price_dist.png")
+```
+
+    - log price follows different distribution depending on city_id and year
+    - Adding random effect or interaction term of city_id and year is reasonable
+
+```{r}
+district_fig <- ggplot(long, aes(x = factor(city), y = price)) +
+    geom_boxplot() +
+    theme_gray(base_family = "HiraKakuPro-W3") +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+    scale_y_log10(breaks = 10 ** (0:8), limits = c(10 ** 5, 10 ** 8)) +
+    xlab("District in Tokyo") + ylab("Land Price [JPY]")
+ggsave(district_fig, filename = "../figures/district_dist.png", width = 10, height = 4)
+
+year_fig <- ggplot(long, aes(x = factor(price_year), y = price)) +
+    geom_boxplot() +
+    scale_y_log10(breaks = 10 ** (0:8), limits = c(10 ** 5, 10 ** 8)) +
+    xlab("Year") + ylab("Land Price [JPY]") + 
+    theme(axis.text.x = element_text(angle = 45, hjust = 1))
+ggsave(year_fig, filename = "../figures/year_dist.png", width = 10, height = 4)
+
+ggplot(long, aes(x = factor(time_lapse_year), y = price_log)) +
+    geom_boxplot() +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+    - Publications of hazard maps were between 2002 and 2010 
+    - Most of the points are covered by the publication at 2005/07/08
+
+```{r}
+table(long$map_date)
+```
+
+    - The mean log price shows parellel trend between area with inundation and one without inundation.
+    - The size of the difference became larger between (1) 1987 ~ 1992 and (2) 1999 ~ 2006
+    - (1) is probably caused by bubble economy. Non-inundation area is historically richer area which got more investment
+    - (2) is probably caused by development of many skyscrapers as an economic boosting measure, which mainly happened in non-inundation area
+
+```{r}
+mean_sd = long %>% 
+    group_by(price_year, is_depth) %>% 
+    summarise(mean = mean(price_log), sd = sd(price_log))
+
+ggplot(mean_sd, aes(x = price_year, y = mean, color = is_depth, group = is_depth)) +
+    geom_errorbar(aes(ymin = mean - sd, ymax = mean + sd)) +
+    geom_line() + geom_point() +
+    theme_gray(base_family = "HiraKakuPro-W3") +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+```{r fig.width=7, fig.height=4}
+mean_sd = long %>% 
+    group_by(price_year, is_depth, city) %>% 
+    summarise(mean = mean(price_log), sd = sd(price_log))
+
+ggplot(mean_sd, aes(x = price_year, y = mean, color = is_depth, group = is_depth)) +
+    geom_errorbar(aes(ymin = mean - sd, ymax = mean + sd)) +
+    geom_line() + geom_point() +
+    theme_gray(base_family = "HiraKakuPro-W3") +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+    facet_wrap(~city)
+```
+
+```{r}
+ggplot(data = long, mapping = aes(x = as.numeric(time_lapse), y = price_log, color = factor(map_date))) +
+    geom_point(size = 0.5)
 ```
 
 
 ```{r}
-ggplot(long, aes(x = factor(price_year), y = price_log)) +
-    geom_boxplot() +
-    theme(axis.text.x = element_text(angle = 45, hjust = 1))
-
-ggplot(long, aes(x = factor(city_id), y = price_log)) +
-    geom_boxplot() +
-    theme(axis.text.x = element_text(angle = 45, hjust = 1))
-
-ggplot(long, aes(x = factor(time_lapse_year), y = price_log)) +
-    geom_boxplot()
+long_2019
 ```
 
 
 ## Linear Model
 
 ```{r}
-model_glm <- lm(data = long, formula = price_log ~ factor(time_lapse_year))
-summary(model_glm)
-```
+model_lm <- lm(data = long, formula = price_log ~ factor(time_lapse_year))
+summary(model_lm)
+par(mfrow = c(2, 2))
+plot(model_lm)
 
-
-```{r}
-coef_tb <- model_glm %>% 
+coef_tb <- model_lm %>% 
     tidy(conf.int = TRUE) %>% 
     filter(term != '(Intercept)') %>% 
     mutate(term = gsub(term, pattern = 'factor\\(time_lapse_year\\)', replacement = '')) %>% 
@@ -138,24 +224,16 @@ ggplot(data = coef_tb) +
     geom_pointrange(aes(x = term, y = estimate, ymin = conf.low, ymax = conf.high))
 ```
 
-
-```{r}
-plot(model_glm)
-lag.plot(long$price_log)
-```
-
-
-
 ## Linear Mixed Model (Only random intercept)
 
 
 ```{r}
 model_lmm <- lmer(data = long, formula = price_log ~ factor(time_lapse_year) + (1 | price_year) + (1 | city_id))
 summary(model_lmm)
-```
+plot(model_lmm)
+qqnorm(resid(model_lmm))
+qqline(resid(model_lmm))
 
-
-```{r}
 coef_tb <- model_lmm %>% 
     tidy(conf.int = TRUE) %>% 
     filter(group == 'fixed') %>%
@@ -165,28 +243,10 @@ coef_tb <- model_lmm %>%
 coef_tb
 
 ggplot(data = coef_tb) +
-    geom_pointrange(aes(x = term, y = estimate, ymin = conf.low, ymax = conf.high))
+    geom_pointrange(aes(x = term, y = estimate, ymin = conf.low, ymax = conf.high)) +
+    xlim(-5, 10) +
+    xlab("Land price evaluation year - Hazard map publication year") + ylab("Mean land price difference(Treated - Control)")
 ```
 
 
-```{r}
-plot(model_glmm)
-
-qqnorm(resid(model_glmm))
-qqline(resid(model_glmm))
-```
-
-## Linear Mixed Model (random intercept + random coefficitnet)
-
-```{r}
-model_lmm_coef <- brm(
-  formula = price_log ~ factor(time_lapse_year) + (factor(time_lapse_year) || price_year) + (factor(time_lapse_year) || city_id),
-  family = gaussian(link = "identity"),
-  data = long,
-  seed = 1,
-  iter = 6000,
-  warmup = 5000,
-  control = list(adapt_delta = 0.97, max_treedepth = 15)
-)
-```
 

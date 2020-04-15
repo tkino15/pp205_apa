@@ -1,11 +1,10 @@
 version: "3"
 services:
-    rstats:
-        image: gcr.io/kaggle-images/rstats:staging 
-        container_name: rstats
+    rocker-stan:
+        image: rocker/geospatial:latest 
+        container_name: rocker-stan
         volumes:
-            - $PWD:/home/rstudio/project
-        working_dir: /home/rstudio
+            - $PWD:/tmp/working
         tty: true
         ports:
             - 8787:8787

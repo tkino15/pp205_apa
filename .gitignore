@@ -1,6 +1,7 @@
 # original
 .DS_Store
 .vscode
+*.Rproj
 .Rdata
 .Rhistory
 
